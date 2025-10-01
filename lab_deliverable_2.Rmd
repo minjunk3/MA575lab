@@ -9,6 +9,20 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r install-once, eval=FALSE, warning = FALSE}
+install.packages("tidyverse", dependencies = TRUE)
+install.packages("broom", dependencies = TRUE)
+install.packages("kableExtra", dependencies = TRUE)
+install.packages("here", dependencies = TRUE)
+```
+
+```{r packages, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(broom)
+library(kableExtra)
+library(here)
+```
+
 ## R Markdown
 
 This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
