@@ -2,7 +2,10 @@
 title: "lab_deliverable_2"
 author: "Yihang Duanmu, Minjun Kim, Annelise Schreiber"
 date: "2025-10-01"
-output: html_document
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -10,16 +13,105 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r packages, message=FALSE, warning=FALSE}
-library(tidyverse)
-library(broom)
-library(kableExtra)
-library(here)
-library(readr)
-library(dplyr)
+library(tidyverse); library(broom); library(kableExtra); library(here); library(janitor); library(lubridate); library(readr); library(dplyr); library(emmeans); library(ggplot2)
 ```
+First, install the necessary packages.
 
 ```{r load data}
-library(readr)
-fb <- readr::read_csv("facebook_updated.csv", show_col_types = FALSE)
-glimpse(fb)
+fb_raw <- readr::read_delim("dataset_Facebook.csv", delim = ";", show_col_types = FALSE)
+
+fb <- fb_raw |>
+  janitor::clean_names() |>
+  mutate(
+    post_month   = suppressWarnings(as.integer(post_month)),
+    post_weekday = suppressWarnings(as.integer(post_weekday)),
+    post_hour    = suppressWarnings(as.integer(post_hour)),
+    paid         = if_else(is.na(paid), 0L, as.integer(paid)),
+    lifetime_post_consumers = as.numeric(lifetime_post_consumers)
+  )
 ```
+Load the csv file and standardize the column names.
+
+```{r feature engineering}
+fb2 <- fb |>
+  mutate(
+    post_weekday_num = post_weekday,
+    post_hour_num    = post_hour,
+    post_month_num   = post_month
+  )
+
+# Weekday factor (1–7 expected)
+wk_labels <- c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")
+if (all(!is.na(fb2$post_weekday_num)) && all(fb2$post_weekday_num %in% 1:7)) {
+  wday_fac <- factor(fb2$post_weekday_num, levels = 1:7, labels = wk_labels, ordered = TRUE)
+} else {
+  # fallback if strings slipped through
+  wday_fac <- factor(as.character(fb$post_weekday), ordered = TRUE)
+}
+
+# Hour factor: detect actual range (handles 0–23 or 1–23)
+hour_levels <- sort(unique(fb2$post_hour_num[!is.na(fb2$post_hour_num)]))
+hour_fac <- factor(fb2$post_hour_num, levels = hour_levels, ordered = TRUE)
+
+# Month factor (1–12 -> Jan..Dec)
+if (all(!is.na(fb2$post_month_num)) && all(fb2$post_month_num %in% 1:12)) {
+  month_fac <- factor(fb2$post_month_num, levels = 1:12, labels = month.abb, ordered = TRUE)
+} else {
+  month_fac <- factor(fb$post_month, ordered = TRUE)
+}
+
+# Paid flag as tidy factor
+paid_fac <- factor(if_else(is.na(fb$paid) | fb$paid == 0, "Unpaid", "Paid"),
+                   levels = c("Unpaid","Paid"))
+```
+This block standardizes your time and paid fields for modeling. First, it builds fb2 by safely coercing post_weekday, post_hour, and post_month to integers (silently turning non-numeric text into NA). Then it creates ordered factors: wday_fac maps weekday codes (or text like “Monday”) to "Mon"–"Sun"; hour_fac turns hours into an ordered 0–23 factor; and month_fac maps 1–12 to "Jan"–"Dec" (or falls back to whatever strings exist).
+
+```{r build-dat}
+dat <- tibble(
+  consumers = fb$lifetime_post_consumers,
+  paid = paid_fac,
+  wday = wday_fac,
+  hour= hour_fac,
+  month = month_fac,
+  idx = seq_len(nrow(fb))
+)
+
+summary(dat$consumers)
+```
+This code builds the analysis tibble dat—it picks the response (consumers) and the cleaned timing predictors (wday, hour, month), adds the promotion flag (paid), and creates a simple time-order index (idx). The summary(dat$consumers) line quickly checks the outcome’s distribution; the output (min 9, Q1 ≈ 333, median ≈ 552, mean ≈ 799, Q3 ≈ 956, max ≈ 11,328) shows a right-skewed variable with large upper outliers, which motivates options like log1p(consumers) or robust SEs in later models.
+
+---
+
+Question 1: Does the date and time in which a post is made impact the engagement that said post receives?
+
+We used log1p(consumers) because engagement counts are extremely right-skewed with a few huge outliers, which compresses most points near zero on the raw scale and can overly influence the fit.
+
+```{r Q1}
+plot_df <- dat |> mutate(hour_num = as.numeric(as.character(hour)))
+
+ggplot(plot_df, aes(x = hour_num, y = log1p(consumers))) +
+  geom_point(shape = 1, alpha = 0.45, size = 1.2, position = position_jitter(width = 0.25, height = 0)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Point Plot with Best-Fit Line",
+       subtitle = "Engagement (log1p) vs Hour of Day",
+       x = "Hour of Day (0–23)", y = "log(1 + Consumers)") +
+  theme_minimal()
+```
+
+The point plot of log1p(consumers) vs hour shows a very slight upward slope, indicating a weak tendency for engagement to be higher at later hours.
+
+```{r scatter_weekday_ols, fig.width=6, fig.height=3.6, dpi=220}
+wk_map <- setNames(1:7, c("Mon","Tue","Wed","Thu","Fri","Sat","Sun"))
+plot_df2 <- dat |> mutate(wday_num = unname(wk_map[as.character(wday)]))
+
+ggplot(plot_df2, aes(x = wday_num, y = log1p(consumers))) +
+  geom_point(shape = 1, alpha = 0.45, size = 1.2, position = position_jitter(width = 0.15, height = 0)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_x_continuous(breaks = 1:7, labels = names(wk_map)) +
+  labs(title = "Point Plot with Best-Fit Line",
+       subtitle = "Engagement (log1p) vs Weekday",
+       x = "Weekday", y = "log(1 + Consumers)") +
+  theme_minimal()
+```
+
+The point plot of log1p(consumers) by weekday shows an almost flat best-fit line, with similar clouds of points for Mon–Sun.
