@@ -1,23 +1,39 @@
 ---
-title: "lab_deliverable_2"
+title: "Lab_deliverable_2"
 author: "Yihang Duanmu, Minjun Kim, Annelise Schreiber"
-date: "2025-10-01"
+date: "2025-10-02"
 output:
-  html_document: default
-  word_document: default
   pdf_document: default
+  word_document: default
+  html_document: default
+header-includes:
+  - \usepackage{fancyvrb}
+  - \DefineVerbatimEnvironment{Highlighting}{Verbatim}{fontsize=\footnotesize,commandchars=\\\{\}}
+  - \DefineVerbatimEnvironment{Verbatim}{Verbatim}{fontsize=\footnotesize}
 ---
+## Part 1
+The three questions of interest remain the same for us, they are:
+
+1. Does the date and time in which a post is made impact the engagement that said post receives?
+
+2. Does the fact of a post being paid/unpaid impact the average reach of the post significantly?
+
+3. Does the cosmetics brand gain significant exposure over the course of the year, from first to latest post analyzed in 2014?
+
+## Part 2
+
+First, we standardize and clean the data.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=5, fig.height=3, fig.align="center")
 ```
 
-```{r packages, message=FALSE, warning=FALSE}
-library(tidyverse); library(broom); library(kableExtra); library(here); library(janitor); library(lubridate); library(readr); library(dplyr); library(emmeans); library(ggplot2)
+```{r packages, include=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse); library(broom); library(kableExtra); library(here); library(janitor); library(lubridate); library(readr); library(dplyr); library(emmeans); library(ggplot2); library(patchwork)
 ```
-First, install the necessary packages.
 
-```{r load data}
+```{r load data, include=FALSE}
 fb_raw <- readr::read_delim("dataset_Facebook.csv", delim = ";", show_col_types = FALSE)
 
 fb <- fb_raw |>
@@ -30,9 +46,10 @@ fb <- fb_raw |>
     lifetime_post_consumers = as.numeric(lifetime_post_consumers)
   )
 ```
-Load the csv file and standardize the column names.
 
-```{r feature engineering}
+All the post_weekday, post_hour, and post_month data are turned to integers with non-numeric text being turned into NA. Then, wday_fac maps weekday codes from 1-7 to "Mon"–"Sun"; hour_fac turns hours into an ordered 0–23 factor; and month_fac maps 1–12 to "Jan"–"Dec" (or falls back to whatever strings exist).
+
+```{r feature engineering, include=FALSE}
 fb2 <- fb |>
   mutate(
     post_weekday_num = post_weekday,
@@ -64,7 +81,8 @@ if (all(!is.na(fb2$post_month_num)) && all(fb2$post_month_num %in% 1:12)) {
 paid_fac <- factor(if_else(is.na(fb$paid) | fb$paid == 0, "Unpaid", "Paid"),
                    levels = c("Unpaid","Paid"))
 ```
-This block standardizes your time and paid fields for modeling. First, it builds fb2 by safely coercing post_weekday, post_hour, and post_month to integers (silently turning non-numeric text into NA). Then it creates ordered factors: wday_fac maps weekday codes (or text like “Monday”) to "Mon"–"Sun"; hour_fac turns hours into an ordered 0–23 factor; and month_fac maps 1–12 to "Jan"–"Dec" (or falls back to whatever strings exist).
+
+Then we build the analysis tibble dat—it picks the response variables (post consumers) and the cleaned timing predictors (wday, hour, month), adds the promotion flag (paid or unpaid), and creates a simple time-order index (idx). The summary(dat\$consumers) line quickly checks the outcome’s distribution; the output shows a right-skewed variable with large upper outliers, which motivates options like log1p(consumers) or robust SEs in later models.
 
 ```{r build-dat}
 dat <- tibble(
@@ -75,45 +93,77 @@ dat <- tibble(
   month = month_fac,
   idx = seq_len(nrow(fb))
 )
-
 summary(dat$consumers)
 ```
-This code builds the analysis tibble dat—it picks the response (consumers) and the cleaned timing predictors (wday, hour, month), adds the promotion flag (paid), and creates a simple time-order index (idx). The summary(dat$consumers) line quickly checks the outcome’s distribution; the output (min 9, Q1 ≈ 333, median ≈ 552, mean ≈ 799, Q3 ≈ 956, max ≈ 11,328) shows a right-skewed variable with large upper outliers, which motivates options like log1p(consumers) or robust SEs in later models.
 
----
+------------------------------------------------------------------------
 
-Question 1: Does the date and time in which a post is made impact the engagement that said post receives?
+### Question 1: Does the date and time in which a post is made impact the engagement that said post receives?
 
-We used log1p(consumers) because engagement counts are extremely right-skewed with a few huge outliers, which compresses most points near zero on the raw scale and can overly influence the fit.
+We used the posted hours and posted weekdates as two seperate covariates. And we used log1p(consumers) as the response variable because engagement counts are extremely right-skewed with a few huge outliers, which compresses most points near zero on the raw scale and can overly influence the fit. The following plots show the distribution of the data points.
 
-```{r Q1}
+```{r Q1_regression, message=FALSE}
+# Hour plot
 plot_df <- dat |> mutate(hour_num = as.numeric(as.character(hour)))
-
-ggplot(plot_df, aes(x = hour_num, y = log1p(consumers))) +
-  geom_point(shape = 1, alpha = 0.45, size = 1.2, position = position_jitter(width = 0.25, height = 0)) +
-  geom_smooth(method = "lm", se = FALSE) +
-  labs(title = "Point Plot with Best-Fit Line",
-       subtitle = "Engagement (log1p) vs Hour of Day",
-       x = "Hour of Day (0–23)", y = "log(1 + Consumers)") +
+p1 <- ggplot(plot_df, aes(x = hour_num, y = log1p(consumers))) +
+  geom_point(shape = 1, alpha = 0.45, size = 1.2,
+             position = position_jitter(width = 0.25, height = 0)) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Engagement vs Hour of Day",
+       x = "Hour (0–23)", y = "log(1 + Consumers)") +
   theme_minimal()
+
+# Weekday plot
+wk_map <- setNames(1:7, c("Mon","Tue","Wed","Thu","Fri","Sat","Sun"))
+plot_df2 <- dat |> mutate(wday_num = unname(wk_map[as.character(wday)]))
+p2 <- ggplot(plot_df2, aes(x = wday_num, y = log1p(consumers))) +
+  geom_point(shape = 1, alpha = 0.45, size = 1.2,
+             position = position_jitter(width = 0.15, height = 0)) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  scale_x_continuous(breaks = 1:7, labels = names(wk_map)) +
+  labs(title = "Engagement vs Weekday",
+       x = "Weekday", y = "log(1 + Consumers)") +
+  theme_minimal()
+
+p1 + p2
 ```
 
 The point plot of log1p(consumers) vs hour shows a very slight upward slope, indicating a weak tendency for engagement to be higher at later hours.
 
-```{r scatter_weekday_ols, fig.width=6, fig.height=3.6, dpi=220}
-wk_map <- setNames(1:7, c("Mon","Tue","Wed","Thu","Fri","Sat","Sun"))
-plot_df2 <- dat |> mutate(wday_num = unname(wk_map[as.character(wday)]))
+The point plot of log1p(consumers) by weekday shows an almost flat best-fit line, with similar clouds of points for Mon–Sun.
 
-ggplot(plot_df2, aes(x = wday_num, y = log1p(consumers))) +
-  geom_point(shape = 1, alpha = 0.45, size = 1.2, position = position_jitter(width = 0.15, height = 0)) +
-  geom_smooth(method = "lm", se = FALSE) +
-  scale_x_continuous(breaks = 1:7, labels = names(wk_map)) +
-  labs(title = "Point Plot with Best-Fit Line",
-       subtitle = "Engagement (log1p) vs Weekday",
-       x = "Weekday", y = "log(1 + Consumers)") +
-  theme_minimal()
+The two OLS outputs are similar so we take the OLS output for fitting post consumers to post hour as an example:
+
+```{r}
+# OLS: engagement vs hour
+model_hour <- lm(log1p(consumers) ~ hour_num, data = plot_df)
+summary(model_hour)
 ```
 
+The result shows slight linear relationship between post consumers and post date and time. However, the p-value shows that the results are not significant, meaning the model can be improved.
+
+### Question 2: Does the fact of a post being paid/unpaid impact the average reach of the post significantly?
+
+To analyze whether a post being paid or unpaid impacts reach, we have:
+
+Response variable (Y): "consumers" - This represents lifetime post consumers, a numerical value. Covariate (X): "paid" - This is a binary variable (e.g., 1 for paid posts, 0 for unpaid). It allows us to compare the average reach between the two groups.
+
+Since we want to see whether paid status impacts average reach, a linear model is appropriate with paid status as the independent variable, and lifetime consumers as teh response. This variable was used to represent reach as we felt the number of consumers of a post best represented overall reach.
+
+Once again, using log1p(consumers) to negate the impact of outliers.
+
+```{r Question 2 Task 2}
+
+ggplot(dat, aes(x = paid, y = log1p(consumers))) +
+  geom_point(shape = 1, alpha = 0.45, size = 1.2, position = position_jitter(width = 0.25,   height = 0)) +
+  labs(title = "Consumers vs Paid Status",
+       x = "Paid Status (0 = Unpaid, 1 = Paid)",
+       y = "Consumers") +
+  theme_minimal()
+
+```
+
+<<<<<<< Updated upstream
 The point plot of log1p(consumers) by weekday shows an almost flat best-fit line, with similar clouds of points for Mon–Sun.
 
 ### Question 2
@@ -144,6 +194,11 @@ ggplot(dat, aes(x = paid, y = log1p(consumers))) +
 There seems to be a very slight upward trend in reach as a result of posts being paid.
 
 ``` {r Question 2 Task 3}
+=======
+There seems to be a very slight upward trend in reach as a result of posts being paid.
+
+```{r Question 2 Task 3}
+>>>>>>> Stashed changes
 
 # Basic OLS model
 model <- lm(log1p(consumers) ~ paid, data = dat)
@@ -153,6 +208,7 @@ summary(model)
 
 We can interpret these results from the OLS model...
 
+<<<<<<< Updated upstream
 The intercept is the average number of log1p(consumers) for unpaid posts.
 The paid coefficient is the average additional reach for paid posts as compared to unpaid.
 
@@ -176,3 +232,61 @@ ggplot(dat, aes(x = paid_numeric, y = log1p(consumers))) +
 ```
 
 This model determines that there is an impact on reach based on paid status; however, it is not necessarily the strongest factor as the R^2 value is so small. This likely indicates that the variation in the response variable is due more largely to other factors than whether or not a post was paid.
+=======
+The intercept is the average number of log1p(consumers) for unpaid posts. The paid coefficient is the average additional reach for paid posts as compared to unpaid.
+
+Intercept: \~6.25, which would be \~517 consumers after back transforming. Paid Coefficient: \~114 more consumers for paid posts (after back transforming) Since the p-value of 0.0265 is less than 0.05, the difference between paid and unpaid is statistically significant. As the t-value of 2.225 is greater than 2, it is also likely that the difference is statistically significant.
+
+```{r Question 2 Task 4, message=FALSE}
+dat$paid_numeric <- as.numeric(dat$paid) - 1
+
+ggplot(dat, aes(x = paid_numeric, y = log1p(consumers))) +
+  geom_point(shape = 1, alpha = 0.45, size = 1.2,
+    position = position_jitter(width = 0.25, height = 0)
+  ) + geom_smooth(method = "lm", se = FALSE, color = "blue", linewidth = 1.2) + 
+  labs(
+    title = "Consumers vs Paid Status",
+    x = "Paid Status (0 = Unpaid, 1 = Paid)",
+    y = "log(1 + Consumers)"
+  ) +
+  theme_minimal()
+```
+
+This model determines that there is an impact on reach based on paid status; however, it is not necessarily the strongest factor as the R\^2 value is so small. This likely indicates that the variation in the response variable is due more largely to other factors than whether or not a post was paid.
+
+### Question 3: Does the cosmetics brand gain significant exposure over the course of the year, from first to latest post analyzed in 2014?
+
+The response variable is still the post consumers and the covariate chosen is the post month. An OLS analysis on these two variables can show whether the posts reach more people as time progresses in the year. log1p(consumers) is chosen as the dependent variable to negate the impact of outliers.
+
+```{r Question 3 fit, message=FALSE}
+plot_df2 <- dat |> dplyr::mutate(mon_num = match(as.character(month), month.abb))
+ggplot(plot_df2, aes(x = mon_num, y = log1p(consumers))) +
+  geom_point(shape = 1, alpha = 0.45, size = 1.2,
+             position = position_jitter(width = 0.15, height = 0)) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +   
+  labs(title = "Exposure vs Month", x = "Month", y = "log(1 + Consumers)") +
+  theme_minimal()
+```
+
+The scatter plot and the fitted regression line shows a slight downward trend. This contradicts our assumption and suggests the brand gradually loses exposure throughout 2014.
+
+```{r Question 3 summary, message=FALSE}
+model_month <- lm(log1p(consumers) ~ mon_num, data = plot_df2)
+summary(model_month)
+```
+
+The negative coefficient confirms the negative relationship between exposure and months. The low p-value suggests that the linear model is significant but the low R^2 value indicates high variation in the data.
+
+## Author Contribution Statement
+1. **First Deliverable**
+   1. **Yihang Duanmu** — insight for the motivation section
+   2. **Minjun Kim** — introduction/summary
+   3. **Annelise Schreiber** — questions/impact; editing
+
+2. **Second Deliverable**
+   1. **Yihang Duanmu** — OLS analysis for Question 3
+   2. **Minjun Kim** — OLS analysis for Question 1
+   3. **Annelise Schreiber** — OLS analysis for Question 2
+
+>>>>>>> Stashed changes
