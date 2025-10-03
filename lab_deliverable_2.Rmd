@@ -7,9 +7,9 @@ output:
   word_document: default
   html_document: default
 header-includes:
-  - \usepackage{fancyvrb}
-  - \DefineVerbatimEnvironment{Highlighting}{Verbatim}{fontsize=\footnotesize,commandchars=\\\{\}}
-  - \DefineVerbatimEnvironment{Verbatim}{Verbatim}{fontsize=\footnotesize}
+  - \usepackage{fvextra}
+  - \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,fontsize=\scriptsize,commandchars=\\\{\}}
+  - \DefineVerbatimEnvironment{verbatim}{Verbatim}{breaklines,fontsize=\scriptsize}
 ---
 ## Part 1
 The three questions of interest remain the same for us, they are:
@@ -84,7 +84,7 @@ paid_fac <- factor(if_else(is.na(fb$paid) | fb$paid == 0, "Unpaid", "Paid"),
 
 Then we build the analysis tibble dat—it picks the response variables (post consumers) and the cleaned timing predictors (wday, hour, month), adds the promotion flag (paid or unpaid), and creates a simple time-order index (idx). The summary(dat\$consumers) line quickly checks the outcome’s distribution; the output shows a right-skewed variable with large upper outliers, which motivates options like log1p(consumers) or robust SEs in later models.
 
-```{r build-dat}
+```{r build-dat, echo=FALSE}
 dat <- tibble(
   consumers = fb$lifetime_post_consumers,
   paid = paid_fac,
@@ -163,42 +163,9 @@ ggplot(dat, aes(x = paid, y = log1p(consumers))) +
 
 ```
 
-<<<<<<< Updated upstream
-The point plot of log1p(consumers) by weekday shows an almost flat best-fit line, with similar clouds of points for Mon–Sun.
-
-### Question 2
-
-Task 1...
-
-To analyze whether a post being paid or unpaid impacts reach, we have:
-
-Response variable (Y): "consumers"
-  - This represents lifetime post consumers, a numerical value.
-Covariate (X): "paid"
-  - This is a binary variable (e.g., 1 for paid posts, 0 for unpaid). It allows us to compare the average reach between the two groups.
-
-Since we want to see whether paid status impacts average reach, a linear model is appropriate with paid status as the independent variable, and lifetime consumers as teh response. This variable was used to represent reach as we felt the number of consumers of a post best represented overall reach.
-
-Once again, using log1p(consumers) to negate the impact of outliers.
-
-```{r Question 2 Task 2}
-
-ggplot(dat, aes(x = paid, y = log1p(consumers))) +
-  geom_point(shape = 1, alpha = 0.45, size = 1.2, position = position_jitter(width = 0.25,   height = 0)) +
-  labs(title = "Consumers vs Paid Status",
-       x = "Paid Status (0 = Unpaid, 1 = Paid)",
-       y = "Consumers") +
-  theme_minimal()
-
-```
-There seems to be a very slight upward trend in reach as a result of posts being paid.
-
-``` {r Question 2 Task 3}
-=======
 There seems to be a very slight upward trend in reach as a result of posts being paid.
 
 ```{r Question 2 Task 3}
->>>>>>> Stashed changes
 
 # Basic OLS model
 model <- lm(log1p(consumers) ~ paid, data = dat)
@@ -208,31 +175,6 @@ summary(model)
 
 We can interpret these results from the OLS model...
 
-<<<<<<< Updated upstream
-The intercept is the average number of log1p(consumers) for unpaid posts.
-The paid coefficient is the average additional reach for paid posts as compared to unpaid.
-
-Intercept: ~6.25, which would be ~517 consumers after back transforming.
-Paid Coefficient: ~114 more consumers for paid posts (after back transforming)
-Since the p-value of 0.0265 is less than 0.05, the difference between paid and unpaid is statistically significant.
-As the t-value of 2.225 is greater than 2, it is also likely that the difference is statistically significant.
-
-```{r Question 2 Task 4}
-
-dat$paid_numeric <- as.numeric(dat$paid) - 1
-
-ggplot(dat, aes(x = paid_numeric, y = log1p(consumers))) +
-  geom_point(shape = 1, alpha = 0.45, size = 1.2, position = position_jitter(width = 0.25,   height = 0)) +
-  geom_smooth(method = "lm", se = FALSE, color = "red", size = 1.2) +
-  labs(title = "Consumers vs Paid Status",
-       x = "Paid Status (0 = Unpaid, 1 = Paid)",
-       y = "Consumers") +
-  theme_minimal()
-
-```
-
-This model determines that there is an impact on reach based on paid status; however, it is not necessarily the strongest factor as the R^2 value is so small. This likely indicates that the variation in the response variable is due more largely to other factors than whether or not a post was paid.
-=======
 The intercept is the average number of log1p(consumers) for unpaid posts. The paid coefficient is the average additional reach for paid posts as compared to unpaid.
 
 Intercept: \~6.25, which would be \~517 consumers after back transforming. Paid Coefficient: \~114 more consumers for paid posts (after back transforming) Since the p-value of 0.0265 is less than 0.05, the difference between paid and unpaid is statistically significant. As the t-value of 2.225 is greater than 2, it is also likely that the difference is statistically significant.
@@ -289,4 +231,3 @@ The negative coefficient confirms the negative relationship between exposure and
    2. **Minjun Kim** — OLS analysis for Question 1
    3. **Annelise Schreiber** — OLS analysis for Question 2
 
->>>>>>> Stashed changes
