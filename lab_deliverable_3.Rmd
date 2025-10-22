@@ -1,0 +1,237 @@
+---
+title: "Lab_deliverable_2"
+author: "Yihang Duanmu, Minjun Kim, Annelise Schreiber"
+date: "2025-10-02"
+output:
+  html_document:
+    css: styles.css
+  word_document:
+    reference_docx: tnr_12pt.docx
+  pdf_document:
+    latex_engine: xelatex
+classoption: 12pt
+header-includes:
+  - \usepackage{fontspec}
+  - \setmainfont{Times New Roman}
+  - \setsansfont{Times New Roman}
+  - \setmonofont{Courier New}
+  - \usepackage{fvextra}
+  - \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,fontsize=\scriptsize,commandchars=\\\{\}}
+  - \DefineVerbatimEnvironment{verbatim}{Verbatim}{breaklines,fontsize=\scriptsize}
+---
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.width = 5.8, fig.height = 3.3, dpi = 220)
+```
+
+```{r}
+# Install-once helper
+need <- c("tidyverse","janitor","readr","broom","kableExtra","lubridate","skimr","patchwork")
+to_get <- setdiff(need, rownames(installed.packages()))
+if (length(to_get)) install.packages(to_get, Ncpus = 2)
+
+library(tidyverse); library(janitor); library(readr)
+library(broom); library(kableExtra); library(skimr); library(patchwork)
+
+theme_set(theme_minimal(base_family = "Times New Roman"))
+```
+
+```{r}
+fname <- if (file.exists("dataset_Facebook.csv")) "dataset_Facebook.csv" else "facebook_updated.csv"
+
+fb_raw <- if (basename(fname) == "dataset_Facebook.csv") {
+  read_delim(fname, delim = ";", show_col_types = FALSE)
+} else {
+  read_csv(fname, show_col_types = FALSE)
+}
+
+fb <- fb_raw |>
+  clean_names() |>
+  mutate(
+    post_month   = suppressWarnings(as.integer(post_month)),
+    post_weekday = suppressWarnings(as.integer(post_weekday)),
+    post_hour    = suppressWarnings(as.integer(post_hour)),
+    paid         = if_else(is.na(paid), 0L, as.integer(paid)),
+    lifetime_post_consumers       = suppressWarnings(as.numeric(lifetime_post_consumers)),
+    lifetime_post_total_reach     = suppressWarnings(as.numeric(lifetime_post_total_reach)),
+    lifetime_post_total_impressions = suppressWarnings(as.numeric(lifetime_post_total_impressions))
+  )
+
+wk_labels <- c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")
+fb <- fb |>
+  mutate(
+    wday_fac  = factor(post_weekday, levels = 1:7, labels = wk_labels, ordered = TRUE),
+    hour_fac  = factor(post_hour, levels = sort(unique(post_hour)), ordered = TRUE),
+    month_fac = factor(post_month, levels = 1:12, labels = month.abb, ordered = TRUE),
+    paid_fac  = factor(if_else(paid == 1, "Paid", "Unpaid"), levels = c("Unpaid","Paid"))
+  )
+```
+
+```{r}
+miss_tbl <- tibble(
+  variable = names(fb),
+  n_miss   = colSums(is.na(fb))
+) |> arrange(desc(n_miss))
+
+# Simple sanity filters (keep data; just flag)
+summary_cols <- fb |>
+  select(lifetime_post_consumers, lifetime_post_total_reach,
+         like, share, comment, paid, post_hour, post_weekday, post_month)
+
+list(
+  head_missing = head(miss_tbl, 10),
+  quick_summary = summary(summary_cols)
+)
+```
+
+```{r}
+core <- fb |>
+  transmute(
+    consumers = lifetime_post_consumers,
+    reach     = lifetime_post_total_reach,
+    likes     = like, shares = share, comments = comment,
+    paid      = paid_fac, hour = post_hour, weekday = wday_fac, month = month_fac
+  )
+
+library(skimr)
+
+skim_tbl <- skim(core |> select(consumers, reach, likes, shares, comments)) |>
+  select(skim_variable, n_missing,
+         numeric.mean, numeric.sd,
+         numeric.p0, numeric.p25, numeric.p50, numeric.p75, numeric.p100) |>
+  dplyr::rename(mean = numeric.mean, sd = numeric.sd,
+                p0 = numeric.p0, p25 = numeric.p25, p50 = numeric.p50,
+                p75 = numeric.p75, p100 = numeric.p100)
+
+skim_tbl |>
+  kableExtra::kbl(caption = "Descriptive statistics (key variables)") |>
+  kableExtra::kable_classic(full_width = FALSE)
+```
+
+```{r}
+dat <- fb |>
+transmute(
+consumers = lifetime_post_consumers,
+reach     = lifetime_post_total_reach,
+y_log_eng   = log1p(lifetime_post_consumers),
+y_log_reach = log1p(lifetime_post_total_reach),
+paid      = paid_fac,
+hour      = hour_fac,
+wday      = wday_fac,
+month     = month_fac,
+hour_num  = as.numeric(as.character(hour_fac)),  # numeric 0..23 (or actual)
+mon_num   = as.integer(month),                   # 1..12 via factor level
+idx       = row_number()
+)
+
+summary(select(dat, consumers, reach, y_log_eng, y_log_reach)) |>
+kbl(caption = "Outcome summaries after log1p construction") |>
+kable_classic(full_width = FALSE)
+```
+
+```{r}
+p_q1 <- ggplot(dat, aes(hour_num, y_log_eng)) +
+geom_point(shape = 1, alpha = 0.45,
+position = position_jitter(width = 0.25, height = 0)) +
+geom_smooth(method = "lm", se = FALSE, linewidth = 1) +
+labs(title = "Engagement (log1p) vs Hour of Day",
+x = "Hour (0–23)", y = "log(1 + Consumers)")
+p_q1
+```
+
+```{r}
+m_q1 <- lm(y_log_eng ~ hour_num, data = dat)
+
+tbl_q1_coef <- tidy(m_q1) |>
+mutate(estimate = round(estimate, 4),
+std.error = round(std.error, 4),
+statistic = round(statistic, 2),
+p.value = signif(p.value, 3))
+
+tbl_q1_fit  <- glance(m_q1) |>
+mutate(across(where(is.numeric), ~round(., 4)))
+
+tbl_q1_coef |>
+kbl(caption = "Q1 OLS: log(1+consumers) ~ hour") |>
+kable_classic(full_width = FALSE)
+
+tbl_q1_fit |>
+select(r.squared, adj.r.squared, sigma, statistic, p.value, df, nobs) |>
+kbl(caption = "Q1 Model fit") |>
+kable_classic(full_width = FALSE)
+```
+
+```{r}
+p_q2 <- ggplot(dat, aes(paid, y_log_reach)) +
+geom_point(shape = 1, alpha = 0.45,
+position = position_jitter(width = 0.15, height = 0)) +
+stat_summary(fun = mean, geom = "point", size = 3, color = "steelblue") +
+labs(title = "Reach (log1p) vs Paid Status",
+x = "Paid Status", y = "log(1 + Reach)")
+p_q2
+```
+
+```{r}
+m_q2 <- lm(y_log_reach ~ paid, data = dat)
+
+tbl_q2_coef <- tidy(m_q2) |>
+mutate(estimate = round(estimate, 4),
+std.error = round(std.error, 4),
+statistic = round(statistic, 2),
+p.value = signif(p.value, 3))
+
+tbl_q2_fit  <- glance(m_q2) |>
+mutate(across(where(is.numeric), ~round(., 4)))
+
+# Back-transform paid effect to percent change on original scale
+
+paid_row <- tbl_q2_coef %>% filter(term == "paidPaid")
+pct_change <- if (nrow(paid_row)) round( (exp(paid_row$estimate) - 1) * 100, 1) else NA_real_
+
+tbl_q2_coef |>
+kbl(caption = "Q2 OLS: log(1+reach) ~ paid") |>
+kable_classic(full_width = FALSE)
+
+tbl_q2_fit |>
+select(r.squared, adj.r.squared, sigma, statistic, p.value, df, nobs) |>
+kbl(caption = "Q2 Model fit") |>
+kable_classic(full_width = FALSE)
+
+tibble(`Paid vs Unpaid (percent change)` = pct_change) |>
+kbl(caption = "Back-transform: Paid effect on reach (approx. %)") |>
+kable_classic(full_width = FALSE)
+```
+
+```{r}
+p_q3 <- ggplot(dat, aes(mon_num, y_log_eng)) +
+geom_point(shape = 1, alpha = 0.45,
+position = position_jitter(width = 0.15, height = 0)) +
+geom_smooth(method = "lm", se = FALSE, linewidth = 1) +
+scale_x_continuous(breaks = 1:12, labels = month.abb) +
+labs(title = "Engagement (log1p) vs Month (2014)",
+x = "Month", y = "log(1 + Consumers)")
+p_q3
+```
+
+```{r}
+m_q3 <- lm(y_log_eng ~ mon_num, data = dat)
+
+tbl_q3_coef <- tidy(m_q3) |>
+mutate(estimate = round(estimate, 4),
+std.error = round(std.error, 4),
+statistic = round(statistic, 2),
+p.value = signif(p.value, 3))
+
+tbl_q3_fit  <- glance(m_q3) |>
+mutate(across(where(is.numeric), ~round(., 4)))
+
+tbl_q3_coef |>
+kbl(caption = "Q3 OLS: log(1+consumers) ~ month index") |>
+kable_classic(full_width = FALSE)
+
+tbl_q3_fit |>
+select(r.squared, adj.r.squared, sigma, statistic, p.value, df, nobs) |>
+kbl(caption = "Q3 Model fit") |>
+kable_classic(full_width = FALSE)
+```
