@@ -108,6 +108,7 @@ skim_tbl |>
   kableExtra::kbl(caption = "Descriptive statistics (key variables)") |>
   kableExtra::kable_classic(full_width = FALSE)
 ```
+Social media performance is driven by both what you post and when you post it. In this report, we analyze a cosmetics brand’s 2014 Facebook posts to understand how timing (hour, weekday, month) and promotion (paid vs. unpaid) relate to audience response. Our three objectives are: (1) test whether posting date/time impacts engagement (measured by Lifetime Post Consumers); (2) assess whether paid promotion is associated with higher reach; and (3) examine whether exposure changes across the year. Because engagement and reach are count-like and highly right-skewed, we model log-transformed outcomes, primarily log⁡(1 + consumers). We use multiple linear regression to estimate effects while controlling for potential confounders (e.g., weekday, month, and—where available—content type/category and page size). This framework lets us quantify marginal effects (and interactions) and report uncertainty via confidence intervals and p-values, providing an interpretable baseline for the team’s subsequent modeling work.
 
 ```{r}
 dat <- fb |>
