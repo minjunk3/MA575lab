@@ -1,7 +1,7 @@
 ---
-title: "Lab_deliverable_2"
+title: "Lab_deliverable_3"
 author: "Yihang Duanmu, Minjun Kim, Annelise Schreiber"
-date: "2025-10-02"
+date: "2025-10-22"
 output:
   html_document:
     css: styles.css
@@ -111,130 +111,92 @@ skim_tbl |>
 
 ```{r}
 dat <- fb |>
-transmute(
-consumers = lifetime_post_consumers,
-reach     = lifetime_post_total_reach,
-y_log_eng   = log1p(lifetime_post_consumers),
-y_log_reach = log1p(lifetime_post_total_reach),
-paid      = paid_fac,
-hour      = hour_fac,
-wday      = wday_fac,
-month     = month_fac,
-hour_num  = as.numeric(as.character(hour_fac)),  # numeric 0..23 (or actual)
-mon_num   = as.integer(month),                   # 1..12 via factor level
-idx       = row_number()
-)
+  transmute(
+    consumers = as.numeric(lifetime_post_consumers),
+    reach     = as.numeric(lifetime_post_total_reach),
+    paid      = paid_fac,
+    paid_fac  = paid_fac,
 
-summary(select(dat, consumers, reach, y_log_eng, y_log_reach)) |>
-kbl(caption = "Outcome summaries after log1p construction") |>
-kable_classic(full_width = FALSE)
+    hour   = hour_fac,
+    wday   = wday_fac,
+    month  = month_fac,
+    idx    = dplyr::row_number()
+  ) |>
+  mutate(
+    y_log_eng   = log1p(consumers),
+    y_log_reach = log1p(reach),
+    hour_num    = as.numeric(as.character(hour)),
+    mon_num     = as.integer(month)
+  ) |>
+  mutate(
+    paid_fac = forcats::fct_relevel(paid_fac, "Unpaid", "Paid"),
+    paid     = paid_fac
+  )
+
+summary(dplyr::select(dat, consumers, reach, y_log_eng, y_log_reach)) |>
+  kableExtra::kbl(caption = "Outcome summaries after log1p construction") |>
+  kableExtra::kable_classic(full_width = FALSE)
+
 ```
 
+##Lab 3: Question 1
+
+Question. Does the time of day a post is made impact engagement, after controlling for weekday, month, paid status, content type/category, and page size?
+
+Response (Y): log1p(consumers) — log-transform stabilizes variance and downweights a few very large posts.
+
+Covariates (X):
+hour_num = post hour (0–23, numeric),
+paid_fac = Paid vs Unpaid,
+Controls: wday_fac (Mon–Sun), mon_num (1–12), type_fac (post type), cat_fac (category), and log_page_likes (log of page_total_likes)
+
 ```{r}
-p_q1 <- ggplot(dat, aes(hour_num, y_log_eng)) +
-geom_point(shape = 1, alpha = 0.45,
+ggplot(dat, aes(x = hour_num, y = y_log_eng, color = paid_fac)) +
+geom_point(alpha = 0.35, shape = 16, size = 1.6,
 position = position_jitter(width = 0.25, height = 0)) +
-geom_smooth(method = "lm", se = FALSE, linewidth = 1) +
-labs(title = "Engagement (log1p) vs Hour of Day",
-x = "Hour (0–23)", y = "log(1 + Consumers)")
-p_q1
+geom_smooth(method = "lm", se = FALSE, linewidth = 1.1) +
+scale_color_manual(values = c("grey40", "steelblue4"), name = "Paid Status") +
+labs(title = "Predicted Engagement by Paid Status and Post Hour",
+x = "Post Hour", y = "log(Consumers + 1)") +
+theme_minimal(base_size = 12) +
+theme(legend.position = "right")
 ```
+The scatter with fitted lines shows only a very small increase in engagement (log(1+consumers)) as posting hour gets later. The “Paid” line sits slightly above the “Unpaid” line across most hours, suggesting paid posts tend to draw marginally higher engagement, but the two lines are nearly overlapping and the point cloud is wide—so the hour effect is weak and the paid vs. unpaid gap is modest relative to the variability. In short: posting time has little practical impact, and paying helps a bit, but neither factor explains much of the dispersion.
 
 ```{r}
-m_q1 <- lm(y_log_eng ~ hour_num, data = dat)
+# Multiple linear regression with interaction
 
-tbl_q1_coef <- tidy(m_q1) |>
-mutate(estimate = round(estimate, 4),
-std.error = round(std.error, 4),
-statistic = round(statistic, 2),
-p.value = signif(p.value, 3))
+m_q1 <- lm(y_log_eng ~ paid_fac + hour_num + paid_fac:hour_num, data = dat)
 
-tbl_q1_fit  <- glance(m_q1) |>
-mutate(across(where(is.numeric), ~round(., 4)))
+# Nice coefficient table
 
-tbl_q1_coef |>
-kbl(caption = "Q1 OLS: log(1+consumers) ~ hour") |>
-kable_classic(full_width = FALSE)
+tbl_q1_coef <- broom::tidy(m_q1, conf.int = TRUE) |>
+dplyr::mutate(dplyr::across(where(is.numeric), ~ round(., 4)),
+term = gsub("paid_fac", "paid:", term))
 
-tbl_q1_fit |>
-select(r.squared, adj.r.squared, sigma, statistic, p.value, df, nobs) |>
-kbl(caption = "Q1 Model fit") |>
-kable_classic(full_width = FALSE)
+# Model fit stats
+
+tbl_q1_fit <- broom::glance(m_q1) |>
+dplyr::mutate(dplyr::across(where(is.numeric), ~ round(., 4))) |>
+dplyr::select(r.squared, adj.r.squared, sigma, statistic, p.value, df, nobs)
+
+# Show
+
+kableExtra::kbl(tbl_q1_coef,
+caption = "Q1 Multiple OLS: log(Consumers+1) ~ Paid + Hour + Paid×Hour") |>
+kableExtra::kable_classic(full_width = FALSE)
+
+kableExtra::kbl(tbl_q1_fit, caption = "Q1 Model fit") |>
+kableExtra::kable_classic(full_width = FALSE)
+
+# (Optional) show the base R summary like your teammate did
+
+# summary(m_q1)
+
 ```
+The multiple-linear model log(Consumers + 1) ~ Paid + Hour + Paid X Hour explains very little of the variation in engagement (R^2 = 0.014; adj. R^2 = 0.008). For unpaid posts at hour 0, the expected log engagement is ~6.13. The main effect for Paid is 0.247 (95% CI: [-0.106, 0.6], p = 0.17), which on the original scale corresponds to roughly +28% consumers (e^0.247 - 1) at hour 0, but the CI includes zero, so it's not statistically significant. The Hour slope is 0.0144 per hour (CI [-0.0067, 0.0356], p = 0.18), about +1.4% per additional hour for unpaid posts - again not significant. The interaction -0.0052 (p = 0.80) suggests the hour effect is slightly smaller for paid posts, but this is also not significant. Overall, posting hour and paid status (and their interaction) show no reliable association with engagement in this dataset; other variables likely drive the differences in consumer counts.
 
-```{r}
-p_q2 <- ggplot(dat, aes(paid, y_log_reach)) +
-geom_point(shape = 1, alpha = 0.45,
-position = position_jitter(width = 0.15, height = 0)) +
-stat_summary(fun = mean, geom = "point", size = 3, color = "steelblue") +
-labs(title = "Reach (log1p) vs Paid Status",
-x = "Paid Status", y = "log(1 + Reach)")
-p_q2
-```
 
-```{r}
-m_q2 <- lm(y_log_reach ~ paid, data = dat)
-
-tbl_q2_coef <- tidy(m_q2) |>
-mutate(estimate = round(estimate, 4),
-std.error = round(std.error, 4),
-statistic = round(statistic, 2),
-p.value = signif(p.value, 3))
-
-tbl_q2_fit  <- glance(m_q2) |>
-mutate(across(where(is.numeric), ~round(., 4)))
-
-# Back-transform paid effect to percent change on original scale
-
-paid_row <- tbl_q2_coef %>% filter(term == "paidPaid")
-pct_change <- if (nrow(paid_row)) round( (exp(paid_row$estimate) - 1) * 100, 1) else NA_real_
-
-tbl_q2_coef |>
-kbl(caption = "Q2 OLS: log(1+reach) ~ paid") |>
-kable_classic(full_width = FALSE)
-
-tbl_q2_fit |>
-select(r.squared, adj.r.squared, sigma, statistic, p.value, df, nobs) |>
-kbl(caption = "Q2 Model fit") |>
-kable_classic(full_width = FALSE)
-
-tibble(`Paid vs Unpaid (percent change)` = pct_change) |>
-kbl(caption = "Back-transform: Paid effect on reach (approx. %)") |>
-kable_classic(full_width = FALSE)
-```
-
-```{r}
-p_q3 <- ggplot(dat, aes(mon_num, y_log_eng)) +
-geom_point(shape = 1, alpha = 0.45,
-position = position_jitter(width = 0.15, height = 0)) +
-geom_smooth(method = "lm", se = FALSE, linewidth = 1) +
-scale_x_continuous(breaks = 1:12, labels = month.abb) +
-labs(title = "Engagement (log1p) vs Month (2014)",
-x = "Month", y = "log(1 + Consumers)")
-p_q3
-```
-
-```{r}
-m_q3 <- lm(y_log_eng ~ mon_num, data = dat)
-
-tbl_q3_coef <- tidy(m_q3) |>
-mutate(estimate = round(estimate, 4),
-std.error = round(std.error, 4),
-statistic = round(statistic, 2),
-p.value = signif(p.value, 3))
-
-tbl_q3_fit  <- glance(m_q3) |>
-mutate(across(where(is.numeric), ~round(., 4)))
-
-tbl_q3_coef |>
-kbl(caption = "Q3 OLS: log(1+consumers) ~ month index") |>
-kable_classic(full_width = FALSE)
-
-tbl_q3_fit |>
-select(r.squared, adj.r.squared, sigma, statistic, p.value, df, nobs) |>
-kbl(caption = "Q3 Model fit") |>
-kable_classic(full_width = FALSE)
-```
 
 ##Lab 3: Question 2
 
