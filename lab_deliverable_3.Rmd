@@ -1,116 +1,97 @@
 ---
 title: "Lab_deliverable_3"
 author: "Yihang Duanmu, Minjun Kim, Annelise Schreiber"
-date: "2025-10-22"
+date: "2025-10-23"
 output:
-  html_document:
-    css: styles.css
-  word_document:
-    reference_docx: tnr_12pt.docx
   pdf_document:
     latex_engine: xelatex
-classoption: 12pt
+  word_document: default
+  html_document: default
 header-includes:
-  - \usepackage{fontspec}
-  - \setmainfont{Times New Roman}
-  - \setsansfont{Times New Roman}
-  - \setmonofont{Courier New}
   - \usepackage{fvextra}
   - \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,fontsize=\scriptsize,commandchars=\\\{\}}
   - \DefineVerbatimEnvironment{verbatim}{Verbatim}{breaklines,fontsize=\scriptsize}
 ---
 
-```{r}
-knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
-                      fig.width = 5.8, fig.height = 3.3, dpi = 220)
+## Introduction
+Social media performance is driven by both what you post and when you post it. In this report, we analyze a cosmetics brand’s 2014 Facebook posts to understand how timing (hour, weekday, month) and promotion (paid vs. unpaid) relate to audience response. Our three objectives are: (1) test whether posting date/time impacts engagement (measured by Lifetime Post Consumers); (2) assess whether paid promotion is associated with higher reach; and (3) examine whether exposure changes across the year. Because engagement and reach are count-like and highly right-skewed, we model log-transformed outcomes, primarily log⁡(1 + consumers). We use multiple linear regression to estimate effects while controlling for potential confounders (e.g., weekday, month, and—where available—content type/category and page size). This framework lets us quantify marginal effects (and interactions) and report uncertainty via confidence intervals and p-values, providing an interpretable baseline for the team’s subsequent modeling work.
+
+## Data
+
+First, we standardize and clean the data.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=5, fig.height=3, fig.align="center")
 ```
 
-```{r}
-# Install-once helper
-need <- c("tidyverse","janitor","readr","broom","kableExtra","lubridate","skimr","patchwork")
-to_get <- setdiff(need, rownames(installed.packages()))
-if (length(to_get)) install.packages(to_get, Ncpus = 2)
-
-library(tidyverse); library(janitor); library(readr)
-library(broom); library(kableExtra); library(skimr); library(patchwork)
-
-theme_set(theme_minimal(base_family = "Times New Roman"))
+```{r packages, include=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse); library(broom); library(kableExtra); library(here); library(janitor); library(lubridate); library(readr); library(dplyr); library(emmeans); library(ggplot2); library(patchwork)
 ```
 
-```{r}
-fname <- if (file.exists("dataset_Facebook.csv")) "dataset_Facebook.csv" else "facebook_updated.csv"
-
-fb_raw <- if (basename(fname) == "dataset_Facebook.csv") {
-  read_delim(fname, delim = ";", show_col_types = FALSE)
-} else {
-  read_csv(fname, show_col_types = FALSE)
-}
+```{r load data, include=FALSE}
+fb_raw <- readr::read_delim("dataset_Facebook.csv", delim = ";", show_col_types = FALSE)
 
 fb <- fb_raw |>
-  clean_names() |>
+  janitor::clean_names() |>
   mutate(
     post_month   = suppressWarnings(as.integer(post_month)),
     post_weekday = suppressWarnings(as.integer(post_weekday)),
     post_hour    = suppressWarnings(as.integer(post_hour)),
     paid         = if_else(is.na(paid), 0L, as.integer(paid)),
-    lifetime_post_consumers       = suppressWarnings(as.numeric(lifetime_post_consumers)),
-    lifetime_post_total_reach     = suppressWarnings(as.numeric(lifetime_post_total_reach)),
-    lifetime_post_total_impressions = suppressWarnings(as.numeric(lifetime_post_total_impressions))
+    lifetime_post_consumers = as.numeric(lifetime_post_consumers)
   )
+```
 
-wk_labels <- c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")
-fb <- fb |>
+All the post_weekday, post_hour, and post_month data are turned to integers with non-numeric text being turned into NA. Then, all the rows with NA are deleted, the type column and the column of paid or unpaid are turned into factor columns.
+
+```{r feature engineering, include=FALSE}
+fb2 <- fb |>
+  drop_na() |>
   mutate(
-    wday_fac  = factor(post_weekday, levels = 1:7, labels = wk_labels, ordered = TRUE),
-    hour_fac  = factor(post_hour, levels = sort(unique(post_hour)), ordered = TRUE),
-    month_fac = factor(post_month, levels = 1:12, labels = month.abb, ordered = TRUE),
-    paid_fac  = factor(if_else(paid == 1, "Paid", "Unpaid"), levels = c("Unpaid","Paid"))
-  )
-```
-
-```{r}
-miss_tbl <- tibble(
-  variable = names(fb),
-  n_miss   = colSums(is.na(fb))
-) |> arrange(desc(n_miss))
-
-# Simple sanity filters (keep data; just flag)
-summary_cols <- fb |>
-  select(lifetime_post_consumers, lifetime_post_total_reach,
-         like, share, comment, paid, post_hour, post_weekday, post_month)
-
-list(
-  head_missing = head(miss_tbl, 10),
-  quick_summary = summary(summary_cols)
-)
-```
-Social media performance is driven by both what you post and when you post it. In this report, we analyze a cosmetics brand’s 2014 Facebook posts to understand how timing (hour, weekday, month) and promotion (paid vs. unpaid) relate to audience response. Our three objectives are: (1) test whether posting date/time impacts engagement (measured by Lifetime Post Consumers); (2) assess whether paid promotion is associated with higher reach; and (3) examine whether exposure changes across the year. Because engagement and reach are count-like and highly right-skewed, we model log-transformed outcomes, primarily log⁡(1 + consumers). We use multiple linear regression to estimate effects while controlling for potential confounders (e.g., weekday, month, and—where available—content type/category and page size). This framework lets us quantify marginal effects (and interactions) and report uncertainty via confidence intervals and p-values, providing an interpretable baseline for the team’s subsequent modeling work.
-```{r}
-core <- fb |>
-  transmute(
-    consumers = lifetime_post_consumers,
-    reach     = lifetime_post_total_reach,
-    likes     = like, shares = share, comments = comment,
-    paid      = paid_fac, hour = post_hour, weekday = wday_fac, month = month_fac
+    post_weekday_num = post_weekday,
+    post_hour_num    = post_hour,
+    post_month_num   = post_month,
+    log_reach     = log1p(lifetime_post_total_reach),
+    log_consumers = log1p(lifetime_post_consumers),
+    paid_fac = factor(if_else(is.na(paid) | paid == 0, "Unpaid", "Paid"),
+                      levels = c("Unpaid", "Paid")),
+    type_fac = factor(type)
   )
 
-library(skimr)
+# Weekday factor (1–7 expected)
+wk_labels <- c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")
+if (all(!is.na(fb2$post_weekday_num)) && all(fb2$post_weekday_num %in% 1:7)) {
+  wday_fac <- factor(fb2$post_weekday_num, levels = 1:7, labels = wk_labels, ordered = TRUE)
+} else {
+  # fallback if strings slipped through
+  wday_fac <- factor(as.character(fb$post_weekday), ordered = TRUE)
+}
 
-skim_tbl <- skim(core |> select(consumers, reach, likes, shares, comments)) |>
-  select(skim_variable, n_missing,
-         numeric.mean, numeric.sd,
-         numeric.p0, numeric.p25, numeric.p50, numeric.p75, numeric.p100) |>
-  dplyr::rename(mean = numeric.mean, sd = numeric.sd,
-                p0 = numeric.p0, p25 = numeric.p25, p50 = numeric.p50,
-                p75 = numeric.p75, p100 = numeric.p100)
+# Hour factor: detect actual range (handles 0–23 or 1–23)
+hour_levels <- sort(unique(fb2$post_hour_num[!is.na(fb2$post_hour_num)]))
+hour_fac <- factor(fb2$post_hour_num, levels = hour_levels, ordered = TRUE)
 
-skim_tbl |>
-  kableExtra::kbl(caption = "Descriptive statistics (key variables)") |>
-  kableExtra::kable_classic(full_width = FALSE)
+# Month factor (1–12 -> Jan..Dec)
+if (all(!is.na(fb2$post_month_num)) && all(fb2$post_month_num %in% 1:12)) {
+  month_fac <- factor(fb2$post_month_num, levels = 1:12, labels = month.abb, ordered = TRUE)
+} else {
+  month_fac <- factor(fb$post_month, ordered = TRUE)
+}
+
+# Paid flag as tidy factor
+paid_fac <- factor(if_else(is.na(fb$paid) | fb$paid == 0, "Unpaid", "Paid"),
+                   levels = c("Unpaid","Paid"))
+
+fb2 <- fb2 |>
+  arrange(post_month_num, post_weekday_num, post_hour_num) |>
+  mutate(post_time_index = row_number())
 ```
 
-```{r}
-dat <- fb |>
+Then we build the analysis tibble dat—it picks the response variables (post consumers) and the cleaned timing predictors (wday, hour, month), adds the promotion flag (paid or unpaid), and creates a simple time-order index (idx). The summary(dat\$consumers) line quickly checks the outcome’s distribution; the output shows a right-skewed variable with large upper outliers, which motivates options like log1p(consumers) as engagement and log1p(reach) in later models.
+
+```{r echo=FALSE}
+dat <- fb2 |>
   transmute(
     consumers = as.numeric(lifetime_post_consumers),
     reach     = as.numeric(lifetime_post_total_reach),
@@ -136,22 +117,18 @@ dat <- fb |>
 summary(dplyr::select(dat, consumers, reach, y_log_eng, y_log_reach)) |>
   kableExtra::kbl(caption = "Outcome summaries after log1p construction") |>
   kableExtra::kable_classic(full_width = FALSE)
-
 ```
 
-##Lab 3: Question 1
+## Statistical Modeling Framework
 
-Question. Does the time of day a post is made impact engagement, after controlling for weekday, month, paid status, content type/category, and page size?
+### Question 1: Does the date and time in which a post is made impact the engagement that said post receives?
 
 Response (Y): log1p(consumers) — log-transform stabilizes variance and downweights a few very large posts.
 
-Covariates (X):
-hour_num = post hour (0–23, numeric),
-paid_fac = Paid vs Unpaid,
-Controls: wday_fac (Mon–Sun), mon_num (1–12), type_fac (post type), cat_fac (category), and log_page_likes (log of page_total_likes)
+Covariates (X): hour_num = post hour (0–23, numeric), paid_fac = Paid vs Unpaid, Controls: wday_fac (Mon–Sun), mon_num (1–12), type_fac (post type), cat_fac (category), and log_page_likes (log of page_total_likes)
 
-```{r}
-ggplot(dat, aes(x = hour_num, y = y_log_eng, color = paid_fac)) +
+```{r echo=FALSE}
+ggplot(fb2, aes(x = post_hour, y = log_consumers, color = paid_fac)) +
 geom_point(alpha = 0.35, shape = 16, size = 1.6,
 position = position_jitter(width = 0.25, height = 0)) +
 geom_smooth(method = "lm", se = FALSE, linewidth = 1.1) +
@@ -161,12 +138,13 @@ x = "Post Hour", y = "log(Consumers + 1)") +
 theme_minimal(base_size = 12) +
 theme(legend.position = "right")
 ```
+
 The scatter with fitted lines shows only a very small increase in engagement (log(1+consumers)) as posting hour gets later. The “Paid” line sits slightly above the “Unpaid” line across most hours, suggesting paid posts tend to draw marginally higher engagement, but the two lines are nearly overlapping and the point cloud is wide—so the hour effect is weak and the paid vs. unpaid gap is modest relative to the variability. In short: posting time has little practical impact, and paying helps a bit, but neither factor explains much of the dispersion.
 
-```{r}
+```{r echo=FALSE}
 # Multiple linear regression with interaction
 
-m_q1 <- lm(y_log_eng ~ paid_fac + hour_num + paid_fac:hour_num, data = dat)
+m_q1 <- lm(log_consumers ~ paid_fac + post_hour + paid_fac:post_hour, data = fb2)
 
 # Nice coefficient table
 
@@ -189,73 +167,63 @@ kableExtra::kable_classic(full_width = FALSE)
 kableExtra::kbl(tbl_q1_fit, caption = "Q1 Model fit") |>
 kableExtra::kable_classic(full_width = FALSE)
 
-# (Optional) show the base R summary like your teammate did
-
-# summary(m_q1)
+summary(m_q1)
 
 ```
-The multiple-linear model log(Consumers + 1) ~ Paid + Hour + Paid X Hour explains very little of the variation in engagement (R^2 = 0.014; adj. R^2 = 0.008). For unpaid posts at hour 0, the expected log engagement is ~6.13. The main effect for Paid is 0.247 (95% CI: [-0.106, 0.6], p = 0.17), which on the original scale corresponds to roughly +28% consumers (e^0.247 - 1) at hour 0, but the CI includes zero, so it's not statistically significant. The Hour slope is 0.0144 per hour (CI [-0.0067, 0.0356], p = 0.18), about +1.4% per additional hour for unpaid posts - again not significant. The interaction -0.0052 (p = 0.80) suggests the hour effect is slightly smaller for paid posts, but this is also not significant. Overall, posting hour and paid status (and their interaction) show no reliable association with engagement in this dataset; other variables likely drive the differences in consumer counts.
+
+Table 2 and Table 3 show the summary statistics of the model. The multiple-linear model log(Consumers + 1) ~ Paid + Hour + Paid X Hour explains very little of the variation in engagement (R^2 = 0.014; adj. R^2 = 0.008). For unpaid posts at hour 0, the expected log engagement is ~6.13. The main effect for Paid is 0.247 (95% CI: [-0.106, 0.6], p = 0.17), which on the original scale corresponds to roughly +28% consumers (e^0.247 - 1) at hour 0, but the CI includes zero, so it's not statistically significant. The Hour slope is 0.0144 per hour (CI [-0.0067, 0.0356], p = 0.18), about +1.4% per additional hour for unpaid posts - again not significant. The interaction -0.0052 (p = 0.80) suggests the hour effect is slightly smaller for paid posts, but this is also not significant. Overall, posting hour and paid status (and their interaction) show no reliable association with engagement in this dataset; other variables likely drive the differences in consumer counts.
 
 
+### Question 2: Does the fact of a post being paid/unpaid impact the average reach of the post significantly?
 
-##Lab 3: Question 2
+Response variable (Y): "reach" - This represents lifetime reach of the post post, a numerical value.
 
-Question: Does the time that a post is made during the day, coupled with the post being paid or not, impact the reach that a post gets?
-
-Response variable (Y): "consumers"
-  - This represents lifetime post consumers, a numerical value.
-  
-Covariates: 
-"paid"
-  - This is a binary variable (e.g., 1 for paid posts, 0 for unpaid). It allows us to compare the average reach between the two groups.
-"post_hour"
-  - This variable represents the time of day a post was made.
+Covariates: "paid" - This is a binary variable (e.g., 1 for paid posts, 0 for unpaid). It allows us to compare the average reach between the two groups. "post_hour" - This variable represents the time of day a post was made.
 
 Since we want to see whether the hour of a post and paid status impacts average reach, a multiple linear regression model is appropriate with paid status and post hour as the independent variables, and lifetime consumers as the response. This variable was used to represent reach as we felt the number of consumers of a post best represented overall reach.
 
-```{r Lab 3}
+```{r Lab 3, warning=FALSE, echo=FALSE}
 
-dat$paid <- as.numeric(dat$paid)
-dat$hour <- as.numeric(as.character(dat$hour))
-model <- lm(log1p(consumers) ~ paid + hour, data = dat)
+fb2$paid <- as.numeric(fb2$paid)
+fb2$post_hour <- as.numeric(as.character(fb2$post_hour))
+model <- lm(log_reach ~ paid + post_hour, data = fb2)
 
 pred_dat <- expand.grid(
   paid = c(0, 1),
-  hour = seq(min(dat$hour), max(dat$hour), length.out = 50)
+  post_hour = seq(min(fb2$post_hour), max(fb2$post_hour), length.out = 50)
 )
 
 pred_dat$pred <- predict(model, newdata = pred_dat)
 
-ggplot(dat, aes(x = hour, y = log1p(consumers), color = factor(paid))) +
+ggplot(fb2, aes(x = post_hour, y = log_reach, color = factor(paid))) +
   geom_point(alpha = 0.4, size = 1) +
   geom_line(data = pred_dat, aes(y = pred, color = factor(paid)), size = 1.2) +
   labs(
     title = "Predicted Consumers by Paid Status and Post Hour",
     x = "Post Hour",
-    y = "Log(Consumers + 1)",
+    y = "log(1 + Total Reach)",
     color = "Paid Status"
   ) +
   scale_color_manual(values = c("0" = "#1f77b4", "1" = "#ff7f0e"),
                      labels = c("Unpaid", "Paid")) +
   theme_minimal()
-
 ```
 
-Multiple Linear Regression Model:
-log(Consumersi+1)=β0+β1(Paidi)+β2(Houri)+εi
-β1 represents the expected change in the response as a result of a post being paid as opposed to unpaid; β0 represents the expected change in the response as the result of each added hour in the day that a post is made.
+Multiple Linear Regression Model: log(Consumersi+1)=β0+β1(Paidi)+β2(Houri)+εi β1 represents the expected change in the response as a result of a post being paid as opposed to unpaid; β0 represents the expected change in the response as the result of each added hour in the day that a post is made.
 
 Assumptions: linear relationships between the predictors and the response; independent observations; constant variance of residuals; and normally distributed errors.
 
-```{r Lab 3 pt 2}
+```{r Lab 3 pt 2, echo=FALSE}
 
   summary(model)
 
 ```
-From this data, we're able to have some insight on the research question. It seems as though the influence of a post being paid or not is statistically significant regarding a post's reach, but the hour in which the post is made is not significant. From the adjusted R squared value of 0.009859, we can tell that only about 0.9895% of the variance in log consumers can be accounted for by theses factors--other factors are likely to be more influential.
+
+From this data, we're able to have some insight on the research question. It seems as though the influence of a post being paid or not is statistically significant regarding a post's reach, but the hour in which the post is made is not significant. From the adjusted R squared value of 0.009859, we can tell that only about 3% of the variance in log consumers can be accounted for by theses factors--other factors are likely to be more influential.
 
 Illustration of Model Fit:
-```{r Lab 3 pt 3}
+
+```{r Lab 3 pt 3, echo=FALSE}
 
 #Residuals vs Fitted
 
@@ -264,7 +232,7 @@ library(broom)
 
 resid_df <- augment(model)
 
-ggplot(resid_df, aes(.fitted, .resid)) +
+p1 = ggplot(resid_df, aes(.fitted, .resid)) +
   geom_point(alpha = 0.5) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   labs(x = "Fitted Values", y = "Residuals", title = "Residuals vs Fitted") +
@@ -272,11 +240,365 @@ ggplot(resid_df, aes(.fitted, .resid)) +
 
 #QQ Plot
 
-ggplot(resid_df, aes(sample = .resid)) +
+p2 = ggplot(resid_df, aes(sample = .resid)) +
   stat_qq() +
   stat_qq_line() +
   labs(title = "Normal Q-Q Plot") +
   theme_minimal()
 
+p1 + p2
 ```
-From these graphs, can see that the normality assumption generally holds except at the tails where there seems to be outliers. From the residuals vs fitted graph we can see that linearity holds as the points are approximately scattered about 0 without a clear pattern.
+
+From these graphs, we can see that the normality assumption generally holds except at the tails where there seems to be outliers. From the residuals vs fitted graph we can see that linearity holds as the points are approximately scattered about 0 without a clear pattern.
+
+### Question 3: Does the cosmetics brand gain significant exposure over the course of the year, from first to latest post analyzed in 2014, controlling the same paid status and same post type?
+
+Response variable (Y): "reach" - This represents lifetime reach of the post post, a numerical value.
+
+Covariates: the relative post time of a post in 2014, with earlier posts having lower post time index.
+
+Controlled: "paid" - This is a binary variable (e.g., 1 for paid posts, 0 for unpaid). "type" - Type of a post (e.g. Link, Photo, Status, Video).
+
+```{r Question 3 fit, message=FALSE, echo=FALSE}
+ggplot(fb2, aes(x = post_time_index, y = log_reach, color = paid_fac)) +
+  geom_point(alpha = 0.25, shape = 1, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1.1) +
+  facet_wrap(~ type_fac, scales = "free_y") +
+  labs(
+    title  = "Reach Trend by Paid Status and Post Type",
+    x      = "Post index (earliest to latest)",
+    y      = "log(1 + Total Reach)",
+    color  = "Paid Status"
+  ) +
+  theme_minimal()
+
+```
+
+The scatter plots and the fitted regression line on each type and paid status show a mix of downward and upward trend (mostly downward trend) between total reach and post time. This contradicts our assumption and suggests the brand most likely gradually loses exposure throughout 2014.
+
+Then we fitted the linear model using R and plotted the total trend of total reach against post_time_index:
+
+```{r Question 3 summary, message=FALSE, echo=FALSE}
+model_month <- lm(
+  log_reach ~ post_time_index + paid_fac + type_fac,
+  data = fb2
+)
+b <- summary(model_month)$coefficients["post_time_index", ]
+cat(sprintf("Post time index: Estimate = %.6f, Std. Error = %.6f, t = %.3f, p = %.4g\n",
+            b[1], b[2], b[3], b[4]))
+cat(sprintf("R-squared = %.3f, Adjusted R-squared = %.3f\n",
+            summary(model_month)$r.squared, summary(model_month)$adj.r.squared))
+```
+
+```{r echo=FALSE}
+# Create a grid of values across the year for each Paid × Type
+ggplot(fb2, aes(x = post_time_index, y = log_reach)) +
+  geom_point(alpha = 0.3, shape = 1, size = 1.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "steelblue", linewidth = 1.2) +
+  labs(
+    title = "Overall Reach Trend Over 2014",
+    x = "Post index (earliest to latest)",
+    y = "log(1 + Total Reach)"
+  ) +
+  theme_minimal()
+
+
+```
+
+The negative coefficient confirms the negative relationship between exposure and months. The low p-value suggests that the linear model is significant but the low R\^2 value indicates high variation in the data.
+
+```{r echo=FALSE}
+resid_df <- augment(model_month)
+
+p1 = ggplot(resid_df, aes(.fitted, .resid)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Fitted Values", y = "Residuals", title = "Residuals vs Fitted") +
+  theme_minimal()
+
+#QQ Plot
+
+p2 = ggplot(resid_df, aes(sample = .resid)) +
+  stat_qq() +
+  stat_qq_line() +
+  labs(title = "Normal Q-Q Plot") +
+  theme_minimal()
+
+p1 + p2
+```
+From these graphs, the same results for question 2 holds. The distribution of the error variance appears normal and the assumption of linear model is satisfied. However, there are some outliers for posts with large amount of reach, which is possible for Facebook posts.
+
+## Author Contribution Statement
+
+1.  **First Deliverable**
+    1.  **Yihang Duanmu** — insight for the motivation section
+    2.  **Minjun Kim** — introduction/summary
+    3.  **Annelise Schreiber** — questions/impact; editing
+2.  **Second Deliverable**
+    1.  **Yihang Duanmu** — OLS analysis for Question 3
+    2.  **Minjun Kim** — OLS analysis for Question 1
+    3.  **Annelise Schreiber** — OLS analysis for Question 2
+3.  **Third Deliverable**
+    1.  **Yihang Duanmu** — Statistical modeling for Question 3
+    2.  **Minjun Kim** — Statistical modeling for Question 1
+    3.  **Annelise Schreiber** — Statistical modeling for Question 2
+
+\newpage
+# Appendix
+```{r eval=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=5, fig.height=3, fig.align="center")
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse); library(broom); library(kableExtra); library(here); library(janitor); library(lubridate); library(readr); library(dplyr); library(emmeans); library(ggplot2); library(patchwork)
+```
+
+```{r eval=FALSE}
+fb_raw <- readr::read_delim("dataset_Facebook.csv", delim = ";", show_col_types = FALSE)
+
+fb <- fb_raw |>
+  janitor::clean_names() |>
+  mutate(
+    post_month   = suppressWarnings(as.integer(post_month)),
+    post_weekday = suppressWarnings(as.integer(post_weekday)),
+    post_hour    = suppressWarnings(as.integer(post_hour)),
+    paid         = if_else(is.na(paid), 0L, as.integer(paid)),
+    lifetime_post_consumers = as.numeric(lifetime_post_consumers)
+  )
+```
+
+```{r eval=FALSE}
+fb2 <- fb |>
+  drop_na() |>
+  mutate(
+    post_weekday_num = post_weekday,
+    post_hour_num    = post_hour,
+    post_month_num   = post_month,
+    log_reach     = log1p(lifetime_post_total_reach),
+    log_consumers = log1p(lifetime_post_consumers),
+    paid_fac = factor(if_else(is.na(paid) | paid == 0, "Unpaid", "Paid"),
+                      levels = c("Unpaid", "Paid")),
+    type_fac = factor(type)
+  )
+
+# Weekday factor (1–7 expected)
+wk_labels <- c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")
+if (all(!is.na(fb2$post_weekday_num)) && all(fb2$post_weekday_num %in% 1:7)) {
+  wday_fac <- factor(fb2$post_weekday_num, levels = 1:7, labels = wk_labels, ordered = TRUE)
+} else {
+  # fallback if strings slipped through
+  wday_fac <- factor(as.character(fb$post_weekday), ordered = TRUE)
+}
+
+# Hour factor: detect actual range (handles 0–23 or 1–23)
+hour_levels <- sort(unique(fb2$post_hour_num[!is.na(fb2$post_hour_num)]))
+hour_fac <- factor(fb2$post_hour_num, levels = hour_levels, ordered = TRUE)
+
+# Month factor (1–12 -> Jan..Dec)
+if (all(!is.na(fb2$post_month_num)) && all(fb2$post_month_num %in% 1:12)) {
+  month_fac <- factor(fb2$post_month_num, levels = 1:12, labels = month.abb, ordered = TRUE)
+} else {
+  month_fac <- factor(fb$post_month, ordered = TRUE)
+}
+
+# Paid flag as tidy factor
+paid_fac <- factor(if_else(is.na(fb$paid) | fb$paid == 0, "Unpaid", "Paid"),
+                   levels = c("Unpaid","Paid"))
+
+fb2 <- fb2 |>
+  arrange(post_month_num, post_weekday_num, post_hour_num) |>
+  mutate(post_time_index = row_number())
+```
+
+```{r eval=FALSE}
+dat <- fb2 |>
+  transmute(
+    consumers = as.numeric(lifetime_post_consumers),
+    reach     = as.numeric(lifetime_post_total_reach),
+    paid      = paid_fac,
+    paid_fac  = paid_fac,
+
+    hour   = hour_fac,
+    wday   = wday_fac,
+    month  = month_fac,
+    idx    = dplyr::row_number()
+  ) |>
+  mutate(
+    y_log_eng   = log1p(consumers),
+    y_log_reach = log1p(reach),
+    hour_num    = as.numeric(as.character(hour)),
+    mon_num     = as.integer(month)
+  ) |>
+  mutate(
+    paid_fac = forcats::fct_relevel(paid_fac, "Unpaid", "Paid"),
+    paid     = paid_fac
+  )
+
+summary(dplyr::select(dat, consumers, reach, y_log_eng, y_log_reach)) |>
+  kableExtra::kbl(caption = "Outcome summaries after log1p construction") |>
+  kableExtra::kable_classic(full_width = FALSE)
+```
+
+```{r eval=FALSE}
+ggplot(fb2, aes(x = post_hour, y = log_consumers, color = paid_fac)) +
+geom_point(alpha = 0.35, shape = 16, size = 1.6,
+position = position_jitter(width = 0.25, height = 0)) +
+geom_smooth(method = "lm", se = FALSE, linewidth = 1.1) +
+scale_color_manual(values = c("grey40", "steelblue4"), name = "Paid Status") +
+labs(title = "Predicted Engagement by Paid Status and Post Hour",
+x = "Post Hour", y = "log(Consumers + 1)") +
+theme_minimal(base_size = 12) +
+theme(legend.position = "right")
+```
+
+```{r eval=FALSE}
+# Multiple linear regression with interaction
+
+m_q1 <- lm(log_consumers ~ paid_fac + post_hour + paid_fac:post_hour, data = fb2)
+
+# Nice coefficient table
+
+tbl_q1_coef <- broom::tidy(m_q1, conf.int = TRUE) |>
+dplyr::mutate(dplyr::across(where(is.numeric), ~ round(., 4)),
+term = gsub("paid_fac", "paid:", term))
+
+# Model fit stats
+
+tbl_q1_fit <- broom::glance(m_q1) |>
+dplyr::mutate(dplyr::across(where(is.numeric), ~ round(., 4))) |>
+dplyr::select(r.squared, adj.r.squared, sigma, statistic, p.value, df, nobs)
+
+# Show
+
+kableExtra::kbl(tbl_q1_coef,
+caption = "Q1 Multiple OLS: log(Consumers+1) ~ Paid + Hour + Paid×Hour") |>
+kableExtra::kable_classic(full_width = FALSE)
+
+kableExtra::kbl(tbl_q1_fit, caption = "Q1 Model fit") |>
+kableExtra::kable_classic(full_width = FALSE)
+
+summary(m_q1)
+
+```
+
+```{r, warning=FALSE, eval=FALSE}
+
+fb2$paid <- as.numeric(fb2$paid)
+fb2$post_hour <- as.numeric(as.character(fb2$post_hour))
+model <- lm(log_reach ~ paid + post_hour, data = fb2)
+
+pred_dat <- expand.grid(
+  paid = c(0, 1),
+  post_hour = seq(min(fb2$post_hour), max(fb2$post_hour), length.out = 50)
+)
+
+pred_dat$pred <- predict(model, newdata = pred_dat)
+
+ggplot(fb2, aes(x = post_hour, y = log_reach, color = factor(paid))) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_line(data = pred_dat, aes(y = pred, color = factor(paid)), size = 1.2) +
+  labs(
+    title = "Predicted Consumers by Paid Status and Post Hour",
+    x = "Post Hour",
+    y = "log(1 + Total Reach)",
+    color = "Paid Status"
+  ) +
+  scale_color_manual(values = c("0" = "#1f77b4", "1" = "#ff7f0e"),
+                     labels = c("Unpaid", "Paid")) +
+  theme_minimal()
+```
+
+```{r eval=FALSE}
+
+  summary(model)
+
+```
+
+```{r eval=FALSE}
+
+#Residuals vs Fitted
+
+library(ggplot2)
+library(broom)
+
+resid_df <- augment(model)
+
+p1 = ggplot(resid_df, aes(.fitted, .resid)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Fitted Values", y = "Residuals", title = "Residuals vs Fitted") +
+  theme_minimal()
+
+#QQ Plot
+
+p2 = ggplot(resid_df, aes(sample = .resid)) +
+  stat_qq() +
+  stat_qq_line() +
+  labs(title = "Normal Q-Q Plot") +
+  theme_minimal()
+
+p1 + p2
+```
+
+```{r eval=FALSE}
+ggplot(fb2, aes(x = post_time_index, y = log_reach, color = paid_fac)) +
+  geom_point(alpha = 0.25, shape = 1, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1.1) +
+  facet_wrap(~ type_fac, scales = "free_y") +
+  labs(
+    title  = "Reach Trend by Paid Status and Post Type",
+    x      = "Post index (earliest to latest)",
+    y      = "log(1 + Total Reach)",
+    color  = "Paid Status"
+  ) +
+  theme_minimal()
+
+```
+
+```{r eval=FALSE}
+model_month <- lm(
+  log_reach ~ post_time_index + paid_fac + type_fac,
+  data = fb2
+)
+b <- summary(model_month)$coefficients["post_time_index", ]
+cat(sprintf("Post time index: Estimate = %.6f, Std. Error = %.6f, t = %.3f, p = %.4g\n",
+            b[1], b[2], b[3], b[4]))
+cat(sprintf("R-squared = %.3f, Adjusted R-squared = %.3f\n",
+            summary(model_month)$r.squared, summary(model_month)$adj.r.squared))
+```
+
+```{r eval=FALSE}
+# Create a grid of values across the year for each Paid × Type
+ggplot(fb2, aes(x = post_time_index, y = log_reach)) +
+  geom_point(alpha = 0.3, shape = 1, size = 1.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "steelblue", linewidth = 1.2) +
+  labs(
+    title = "Overall Reach Trend Over 2014",
+    x = "Post index (earliest to latest)",
+    y = "log(1 + Total Reach)"
+  ) +
+  theme_minimal()
+
+
+```
+
+```{r eval=FALSE}
+resid_df <- augment(model_month)
+
+p1 = ggplot(resid_df, aes(.fitted, .resid)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Fitted Values", y = "Residuals", title = "Residuals vs Fitted") +
+  theme_minimal()
+
+#QQ Plot
+
+p2 = ggplot(resid_df, aes(sample = .resid)) +
+  stat_qq() +
+  stat_qq_line() +
+  labs(title = "Normal Q-Q Plot") +
+  theme_minimal()
+
+p1 + p2
+```
